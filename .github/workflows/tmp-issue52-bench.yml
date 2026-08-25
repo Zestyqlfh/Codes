@@ -24,6 +24,8 @@ jobs:
         run: |
           cat >> contracts/receipt-anchor/src/lib.rs <<'EOF'
           #[cfg(test)]
+          extern crate std;
+          #[cfg(test)]
           mod issue52_bench;
           EOF
           cat > contracts/receipt-anchor/src/issue52_bench.rs <<'EOF'
@@ -131,6 +133,8 @@ jobs:
         shell: bash
         run: |
           cat >> contracts/refund-vault/src/lib.rs <<'EOF'
+          #[cfg(test)]
+          extern crate std;
           #[cfg(test)]
           mod issue52_bench;
           EOF
