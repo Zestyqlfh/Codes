@@ -63,7 +63,7 @@ jobs:
           fn print_metrics(name: &str, env: &Env) {
               let budget = env.cost_estimate().budget();
               let r = env.cost_estimate().resources();
-              println!(
+              std::println!(
                   "METRIC|{}|cpu={}|mem={}|read_entries={}|disk_read_entries={}|read_bytes={}|write_entries={}|write_bytes={}|events_bytes={}",
                   name,
                   budget.cpu_instruction_cost(),
@@ -162,7 +162,7 @@ jobs:
           fn print_metrics(name: &str, env: &Env) {
               let budget = env.cost_estimate().budget();
               let r = env.cost_estimate().resources();
-              println!(
+              std::println!(
                   "METRIC|{}|cpu={}|mem={}|read_entries={}|disk_read_entries={}|read_bytes={}|write_entries={}|write_bytes={}|events_bytes={}",
                   name,
                   budget.cpu_instruction_cost(),
