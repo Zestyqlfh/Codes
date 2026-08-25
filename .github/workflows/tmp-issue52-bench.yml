@@ -1,0 +1,204 @@
+name: tmp-issue52-budget-bench
+
+on:
+  push:
+    branches: ["tmp/issue-52-budget-bench"]
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: accensa/accensa-contracts
+          ref: main
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Add temporary ReceiptAnchor benchmarks
+        shell: bash
+        run: |
+          cat >> contracts/receipt-anchor/src/lib.rs <<'EOF'
+          #[cfg(test)]
+          mod issue52_bench;
+          EOF
+          cat > contracts/receipt-anchor/src/issue52_bench.rs <<'EOF'
+          use super::*;
+          use soroban_sdk::{
+              testutils::{Address as _, Ledger},
+              vec, Address, Bytes, BytesN, Env, Vec,
+          };
+
+          fn setup() -> (Env, ReceiptAnchorClient<'static>, Address) {
+              let env = Env::default();
+              env.mock_all_auths();
+              env.cost_estimate().disable_resource_limits();
+              let contract_id = env.register(ReceiptAnchor, ());
+              let client = ReceiptAnchorClient::new(&env, &contract_id);
+              let merchant = Address::generate(&env);
+              client.initialize(&merchant);
+              (env, client, merchant)
+          }
+
+          fn hash_pair(env: &Env, a: &BytesN<32>, b: &BytesN<32>) -> BytesN<32> {
+              let (lo, hi) = if a.to_array() <= b.to_array() {
+                  (a.to_array(), b.to_array())
+              } else {
+                  (b.to_array(), a.to_array())
+              };
+              let mut combined = [0u8; 64];
+              combined[..32].copy_from_slice(&lo);
+              combined[32..].copy_from_slice(&hi);
+              let digest = env
+                  .crypto()
+                  .sha256(&Bytes::from_slice(env, &combined))
+                  .to_array();
+              BytesN::from_array(env, &digest)
+          }
+
+          fn print_metrics(name: &str, env: &Env) {
+              let budget = env.cost_estimate().budget();
+              let r = env.cost_estimate().resources();
+              println!(
+                  "METRIC|{}|cpu={}|mem={}|read_entries={}|disk_read_entries={}|read_bytes={}|write_entries={}|write_bytes={}|events_bytes={}",
+                  name,
+                  budget.cpu_instruction_cost(),
+                  budget.memory_bytes_cost(),
+                  r.memory_read_entries + r.disk_read_entries,
+                  r.disk_read_entries,
+                  r.disk_read_bytes,
+                  r.write_entries,
+                  r.write_bytes,
+                  r.contract_events_size_bytes,
+              );
+          }
+
+          fn bench_anchor(name: &str, count: u32) {
+              let (env, client, _) = setup();
+              let root = BytesN::from_array(&env, &[1u8; 32]);
+              client.anchor_batch(&root, &count, &0, &100);
+              print_metrics(name, &env);
+          }
+
+          #[test]
+          fn issue52_anchor_1() { bench_anchor("anchor_batch_1", 1); }
+          #[test]
+          fn issue52_anchor_500() { bench_anchor("anchor_batch_500", 500); }
+          #[test]
+          fn issue52_anchor_1000() { bench_anchor("anchor_batch_1000", MAX_BATCH_SIZE); }
+
+          fn bench_verify(name: &str, depth: usize) {
+              let (env, client, _) = setup();
+              let leaf = BytesN::from_array(&env, &[7u8; 32]);
+              let mut root = leaf.clone();
+              let mut proof: Vec<BytesN<32>> = vec![&env];
+              for i in 0..depth {
+                  let sibling = BytesN::from_array(&env, &[(i as u8).wrapping_add(20); 32]);
+                  root = hash_pair(&env, &root, &sibling);
+                  proof.push_back(sibling);
+              }
+              let batch_id = client.anchor_batch(&root, &1, &0, &100);
+              assert!(client.verify_receipt(&batch_id, &leaf, &proof));
+              print_metrics(name, &env);
+          }
+
+          #[test]
+          fn issue52_verify_depth_0() { bench_verify("verify_receipt_depth_0", 0); }
+          #[test]
+          fn issue52_verify_depth_5() { bench_verify("verify_receipt_depth_5", 5); }
+          #[test]
+          fn issue52_verify_depth_10() { bench_verify("verify_receipt_depth_10", 10); }
+
+          #[test]
+          fn issue52_prune_64() {
+              let (env, client, _) = setup();
+              let root = BytesN::from_array(&env, &[9u8; 32]);
+              for i in 0..64u32 {
+                  env.ledger().with_mut(|li| li.sequence_number = i + 1);
+                  client.anchor_batch(&root, &1, &(i as u64), &(i as u64 + 1));
+              }
+              env.ledger().with_mut(|li| li.sequence_number = 1000);
+              client.prune_batches(&1000);
+              print_metrics("prune_batches_64", &env);
+          }
+          EOF
+
+      - name: Add temporary RefundVault benchmarks
+        shell: bash
+        run: |
+          cat >> contracts/refund-vault/src/lib.rs <<'EOF'
+          #[cfg(test)]
+          mod issue52_bench;
+          EOF
+          cat > contracts/refund-vault/src/issue52_bench.rs <<'EOF'
+          use super::*;
+          use soroban_sdk::{
+              testutils::Address as _,
+              token::StellarAssetClient,
+              Address, BytesN, Env,
+          };
+
+          const FLOAT: i128 = 1_000_000;
+
+          fn setup(window: u32) -> (Env, RefundVaultClient<'static>, Address, Address) {
+              let env = Env::default();
+              env.mock_all_auths();
+              env.cost_estimate().disable_resource_limits();
+              let merchant = Address::generate(&env);
+              let token_admin = Address::generate(&env);
+              let sac = env.register_stellar_asset_contract_v2(token_admin);
+              let token = sac.address();
+              StellarAssetClient::new(&env, &token).mint(&merchant, &FLOAT);
+              let contract_id = env.register(RefundVault, ());
+              let client = RefundVaultClient::new(&env, &contract_id);
+              client.initialize(&merchant, &token, &window);
+              (env, client, merchant, token)
+          }
+
+          fn print_metrics(name: &str, env: &Env) {
+              let budget = env.cost_estimate().budget();
+              let r = env.cost_estimate().resources();
+              println!(
+                  "METRIC|{}|cpu={}|mem={}|read_entries={}|disk_read_entries={}|read_bytes={}|write_entries={}|write_bytes={}|events_bytes={}",
+                  name,
+                  budget.cpu_instruction_cost(),
+                  budget.memory_bytes_cost(),
+                  r.memory_read_entries + r.disk_read_entries,
+                  r.disk_read_entries,
+                  r.disk_read_bytes,
+                  r.write_entries,
+                  r.write_bytes,
+                  r.contract_events_size_bytes,
+              );
+          }
+
+          #[test]
+          fn issue52_deposit() {
+              let (env, client, merchant, _) = setup(100);
+              client.deposit(&merchant, &500_000);
+              print_metrics("deposit", &env);
+          }
+
+          #[test]
+          fn issue52_refund() {
+              let (env, client, merchant, _) = setup(100);
+              client.deposit(&merchant, &500_000);
+              let payment_ref = BytesN::from_array(&env, &[7u8; 32]);
+              let buyer = Address::generate(&env);
+              client.refund(&payment_ref, &buyer, &120_000, &0);
+              print_metrics("refund", &env);
+          }
+          EOF
+
+      - name: Run resource benchmarks
+        run: cargo test issue52_ -- --nocapture
+
+      - name: Build release Wasm and print sizes
+        run: |
+          cargo build --target wasm32v1-none --release
+          echo "WASM|receipt-anchor|$(wc -c < target/wasm32v1-none/release/receipt_anchor.wasm)"
+          echo "WASM|refund-vault|$(wc -c < target/wasm32v1-none/release/refund_vault.wasm)"
