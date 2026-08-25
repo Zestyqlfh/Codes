@@ -82,6 +82,7 @@ jobs:
           fn bench_anchor(name: &str, count: u32) {
               let (env, client, _) = setup();
               let root = BytesN::from_array(&env, &[1u8; 32]);
+              env.cost_estimate().budget().reset_unlimited();
               client.anchor_batch(&root, &count, &0, &100);
               print_metrics(name, &env);
           }
@@ -104,6 +105,7 @@ jobs:
                   proof.push_back(sibling);
               }
               let batch_id = client.anchor_batch(&root, &1, &0, &100);
+              env.cost_estimate().budget().reset_unlimited();
               assert!(client.verify_receipt(&batch_id, &leaf, &proof));
               print_metrics(name, &env);
           }
@@ -124,6 +126,7 @@ jobs:
                   client.anchor_batch(&root, &1, &(i as u64), &(i as u64 + 1));
               }
               env.ledger().with_mut(|li| li.sequence_number = 1000);
+              env.cost_estimate().budget().reset_unlimited();
               client.prune_batches(&1000);
               print_metrics("prune_batches_64", &env);
           }
@@ -183,6 +186,7 @@ jobs:
           #[test]
           fn issue52_deposit() {
               let (env, client, merchant, _) = setup(100);
+              env.cost_estimate().budget().reset_unlimited();
               client.deposit(&merchant, &500_000);
               print_metrics("deposit", &env);
           }
@@ -193,6 +197,7 @@ jobs:
               client.deposit(&merchant, &500_000);
               let payment_ref = BytesN::from_array(&env, &[7u8; 32]);
               let buyer = Address::generate(&env);
+              env.cost_estimate().budget().reset_unlimited();
               client.refund(&payment_ref, &buyer, &120_000, &0);
               print_metrics("refund", &env);
           }
